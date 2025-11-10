@@ -172,6 +172,8 @@ struct SECURE
 
 #ifdef	OS_WIN32
 	struct SEC_DATA_WIN32 *Data;			// Data
+#else
+	struct SEC_DATA_UNIX *Data;				// Data
 #endif	// OS_WIN32
 };
 
@@ -305,6 +307,9 @@ SECURE_DEVICE SupportedList[] =
 	{25,	SECURE_USB_TOKEN,	"SafeNet",				"SafeNet",				"IDPrimePKCS1164.dll "},
 	{26,	SECURE_USB_TOKEN,	"OpenSC",				"OpenSC",				"opensc-pkcs11.dll"},
 	{27,	SECURE_USB_TOKEN,	"SHALO AUTH",			"AXELL CORPORATION",	"slpkcs11-vc.dll"},
+#ifndef OS_WIN32
+	{28,	SECURE_USB_TOKEN,	"OP-TEE Token",			"Linaro",				"libckteec.so"},
+#endif
 };
 
 #ifdef	OS_WIN32
@@ -314,6 +319,13 @@ typedef struct SEC_DATA_WIN32
 {
 	HINSTANCE hInst;
 } SEC_DATA_WIN32;
+
+#else
+// Unix internal data
+typedef struct SEC_DATA_UNIX
+{
+	void *Handle;  // dlopen handle
+} SEC_DATA_UNIX;
 
 #endif	// OS_WIN32
 

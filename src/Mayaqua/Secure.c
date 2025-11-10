@@ -111,6 +111,10 @@
 #include <windows.h>
 #endif	// WIN32
 
+#ifndef OS_WIN32
+#include <dlfcn.h>
+#endif	// !OS_WIN32
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -327,6 +331,162 @@ void Win32FreeSecModule(SECURE *sec)
 }
 
 #endif	// OS_WIN32
+
+#ifndef OS_WIN32
+// Code for Unix/Linux
+
+// Load shared library for Unix
+void *UnixSecureLoadLibrary(char *modulename)
+{
+	void *handle;
+	char path[MAX_PATH];
+
+	// Validate arguments
+	if (modulename == NULL)
+	{
+		return NULL;
+	}
+
+	// For OP-TEE, use hardcoded path
+	if (StrCmpi(modulename, "libckteec.so") == 0)
+	{
+		handle = dlopen("/usr/lib/libckteec.so", RTLD_NOW | RTLD_LOCAL);
+		if (handle != NULL)
+		{
+			return handle;
+		}
+		// Try with .0 extension
+		handle = dlopen("/usr/lib/libckteec.so.0", RTLD_NOW | RTLD_LOCAL);
+		if (handle != NULL)
+		{
+			return handle;
+		}
+	}
+
+	// Standard PKCS#11 library search paths
+	const char *search_paths[] = {
+		"/usr/lib/%s",
+		"/usr/lib/pkcs11/%s",
+		"/usr/local/lib/%s",
+		"/usr/local/lib/pkcs11/%s",
+		"%s",  // Try as provided
+		NULL
+	};
+
+	int i;
+	for (i = 0; search_paths[i] != NULL; i++)
+	{
+		snprintf(path, sizeof(path), search_paths[i], modulename);
+		handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+		if (handle != NULL)
+		{
+			return handle;
+		}
+	}
+
+	// Log error
+	Debug("PKCS#11: dlopen failed for %s: %s\n", modulename, dlerror());
+	return NULL;
+}
+
+// Examine whether the specified device is installed
+bool UnixIsDeviceSupported(SECURE_DEVICE *dev)
+{
+	void *handle;
+	// Validate arguments
+	if (dev == NULL)
+	{
+		return false;
+	}
+
+	// Try to load the module
+	handle = UnixSecureLoadLibrary(dev->ModuleName);
+	if (handle == NULL)
+	{
+		return false;
+	}
+
+	dlclose(handle);
+	return true;
+}
+
+// Load the PKCS#11 module for Unix
+bool UnixLoadSecModule(SECURE *sec)
+{
+	void *handle;
+	CK_RV (*get_function_list)(CK_FUNCTION_LIST_PTR_PTR);
+	CK_FUNCTION_LIST_PTR api;
+	SEC_DATA_UNIX *u;
+
+	// Validate arguments
+	if (sec == NULL || sec->Dev == NULL)
+	{
+		return false;
+	}
+
+	// Load shared library
+	handle = UnixSecureLoadLibrary(sec->Dev->ModuleName);
+	if (handle == NULL)
+	{
+		return false;
+	}
+
+	// Get C_GetFunctionList
+	get_function_list = (CK_RV (*)(CK_FUNCTION_LIST_PTR_PTR))dlsym(handle, "C_GetFunctionList");
+
+	if (get_function_list == NULL)
+	{
+		Debug("PKCS#11: dlsym(C_GetFunctionList) failed: %s\n", dlerror());
+		dlclose(handle);
+		return false;
+	}
+
+	// Get function list
+	if (get_function_list(&api) != CKR_OK || api == NULL)
+	{
+		Debug("PKCS#11: C_GetFunctionList failed\n");
+		dlclose(handle);
+		return false;
+	}
+
+	// Allocate and store data
+	u = ZeroMalloc(sizeof(SEC_DATA_UNIX));
+	u->Handle = handle;
+	sec->Data = u;
+	sec->Api = api;
+
+	Debug("PKCS#11: Successfully loaded module %s\n", sec->Dev->ModuleName);
+
+	return true;
+}
+
+// Unload the device module for Unix
+void UnixFreeSecModule(SECURE *sec)
+{
+	SEC_DATA_UNIX *u;
+
+	// Validate arguments
+	if (sec == NULL)
+	{
+		return;
+	}
+	if (sec->Data == NULL)
+	{
+		return;
+	}
+
+	u = sec->Data;
+
+	if (u->Handle != NULL)
+	{
+		dlclose(u->Handle);
+	}
+
+	Free(u);
+	sec->Data = NULL;
+}
+
+#endif	// !OS_WIN32
 
 
 // Whether the specified device is a JPKI
@@ -1865,6 +2025,11 @@ bool LoadSecModule(SECURE *sec)
 	if(!ret){
 		return false;
 	}
+#else
+	ret = UnixLoadSecModule(sec);
+	if(!ret){
+		return false;
+	}
 #endif	// OS_WIN32
 
 	// Initialization
@@ -1898,6 +2063,8 @@ void FreeSecModule(SECURE *sec)
 
 #ifdef	OS_WIN32
 	Win32FreeSecModule(sec);
+#else
+	UnixFreeSecModule(sec);
 #endif	// OS_WIN32
 
 }
@@ -1965,6 +2132,8 @@ bool IsDeviceSupported(SECURE_DEVICE *dev)
 	bool b = false;
 #ifdef	OS_WIN32
 	b = Win32IsDeviceSupported(dev);
+#else
+	b = UnixIsDeviceSupported(dev);
 #endif	// OS_WIN32
 	return b;
 }
