@@ -425,7 +425,30 @@ bool UnixLoadSecModuleWithUri(SECURE *sec, const char *uri_str)
 	slot_id = p11_kit_uri_get_slot_id(uri);
 	key_id = p11_kit_uri_get_attribute(uri, CKA_ID);
 	pin = p11_kit_uri_get_pin_value(uri);
-	module_path = p11_kit_uri_get_module_path(uri);
+
+	// Extract module-path manually from URI string
+	// p11_kit_uri_get_module_path() doesn't work for path attributes
+	module_path = NULL;
+	const char *path_start = strstr(uri_str, "module-path=");
+	if (path_start != NULL)
+	{
+		path_start += 12;  // Skip "module-path="
+		const char *path_end = strchr(path_start, ';');
+		if (path_end != NULL)
+		{
+			// Path has a terminator
+			int path_len = path_end - path_start;
+			char *extracted_path = Malloc(path_len + 1);
+			Copy(extracted_path, path_start, path_len);
+			extracted_path[path_len] = 0;
+			module_path = extracted_path;
+		}
+		else
+		{
+			// Path is at the end of the URI
+			module_path = CopyStr((char *)path_start);
+		}
+	}
 
 	// module-path is required in the URI
 	if (module_path == NULL)
